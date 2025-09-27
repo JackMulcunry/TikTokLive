@@ -135,6 +135,7 @@ if (HANDLE) {
   console.log('TIKTOK_USERNAME not set — relay will still accept /inject and serve WS.');
 }
 
+
     broadcast({ type: 'read', ref: safe, user: data?.uniqueId || 'user' });
   } catch (e) {
     console.error('chat handler error', e);
