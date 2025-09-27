@@ -19,6 +19,10 @@
     .curr{max-width:62ch; font-size:clamp(18px,3.6vmin,28px); line-height:1.5; font-variation-settings:'wght' 560}
     .ref{margin-top:1.2vmin; font-size:.9em; letter-spacing:.02em; opacity:.8}
     .stack.anim{transition:transform 700ms cubic-bezier(.2,.7,.2,1)}
+    /* Audio unlock overlay */
+    .unlock { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,.35); backdrop-filter: blur(4px); }
+    .unlock .card{ background:#fff; color:#333; padding:18px 22px; border-radius:14px; box-shadow:0 8px 40px rgba(0,0,0,.25); text-align:center; max-width: 90vw; }
+    .unlock button{ margin-top:10px; padding:10px 14px; border-radius:10px; border:1px solid #ddd; cursor:pointer; }
   </style>
 </head>
 <body>
@@ -40,14 +44,24 @@
 
   <audio id="player" preload="auto"></audio>
 
+  <!-- Audio unlock (required by some browsers for autoplay/tts) -->
+  <div id="unlock" class="unlock" hidden>
+    <div class="card">
+      <div><strong>Enable audio</strong></div>
+      <div>Tap once so verses can be read aloud.</div>
+      <button id="unlockBtn">Enable</button>
+    </div>
+  </div>
+
   <script>
   // ===== CONFIG =====
-  const WS_URL = 'wss://tiktoklive-d3qe.onrender.com/ws';          // <- set to your WebSocket endpoint
+  const WS_URL = 'wss://YOUR_SERVER/ws';           // <- set to your WebSocket endpoint
   const DEFAULT_TRANSLATION = 'kjv';               // bible-api.com translation
   const MIN_GAP_MS = 2500;                          // pause between items
   const AUTOSCROLL_MS = 700;                        // UI transition time (matches CSS)
 
   // ===== STATE =====
+  let audioUnlocked = false;
   const q = []; // queue of {ref, text, audioUrl, user}
   let playing = false; let ws;
   const elPrev = document.getElementById('prev');
@@ -56,6 +70,8 @@
   const elNext = document.getElementById('next');
   const elStack = document.getElementById('stack');
   const elAudio = document.getElementById('player');
+  const elUnlock = document.getElementById('unlock');
+  const elUnlockBtn = document.getElementById('unlockBtn');
 
   // ===== UTIL =====
   const sleep = (ms)=>new Promise(r=>setTimeout(r,ms));
@@ -88,10 +104,35 @@
 
   async function playItem(item){
     await showCurrent(item); updatePreview();
-    elAudio.volume = 1; // fixed for production
+
+    // Wait for user gesture if needed
+    if(!audioUnlocked){ await ensureAudioUnlocked(); }
+
+    elAudio.volume = 1;
 
     if(item.audioUrl){
       elAudio.src = item.audioUrl; try{ await elAudio.play(); }catch(e){}
+      await new Promise(res=> elAudio.onended = res);
+      return;
+    }
+
+    // Browser TTS with watchdog so we never hang
+    if('speechSynthesis' in window){
+      const utter = new SpeechSynthesisUtterance(item.text || item.ref);
+      utter.rate = 0.95; utter.pitch = 1.0; utter.volume = 1;
+      const done = new Promise(res=> utter.onend = res);
+      const watchdog = sleep(15000).then(()=>{ try{ window.speechSynthesis.cancel(); }catch(_){} });
+      try{
+        window.speechSynthesis.cancel();
+        window.speechSynthesis.speak(utter);
+        await Promise.race([done, watchdog]);
+      } catch(_) { await sleep(4000); }
+      return;
+    }
+
+    // Final fallback: brief pause so UI advances
+    await sleep(4000);
+  }catch(e){}
       await new Promise(res=> elAudio.onended = res);
       return;
     }
@@ -143,12 +184,47 @@
         if(msg.type === 'read' && msg.ref){ enqueue(msg.ref, { text: msg.text, audioUrl: msg.audioUrl, user: msg.user }); }
         if(msg.type === 'bulk' && Array.isArray(msg.items)) msg.items.forEach(it=> enqueue(it.ref, { text: it.text, audioUrl: it.audioUrl, user: it.user }));
         if(msg.type === 'clear'){ q.length = 0; }
+        if(!audioUnlocked){ elUnlock.hidden = false; }
+      }catch(e){ /* ignore */ }
+    };
+  };
+    ws.onclose = ()=> setTimeout(connectWS, 2500);
+    ws.onmessage = (evt)=>{
+      try{
+        const msg = JSON.parse(evt.data);
+        if(msg.type === 'read' && msg.ref){ enqueue(msg.ref, { text: msg.text, audioUrl: msg.audioUrl, user: msg.user }); }
+        if(msg.type === 'bulk' && Array.isArray(msg.items)) msg.items.forEach(it=> enqueue(it.ref, { text: it.text, audioUrl: it.audioUrl, user: it.user }));
+        if(msg.type === 'clear'){ q.length = 0; }
       }catch(e){ /* ignore bad messages */ }
     };
   }
 
   // No demo, no HUD, no keyboard handlers. Pure display.
   connectWS();
+
+  // ===== AUDIO UNLOCK HELPERS =====
+  async function ensureAudioUnlocked(){
+    if(audioUnlocked) return;
+    elUnlock.hidden = false;
+    await new Promise(res=>{
+      elUnlockBtn.onclick = async ()=>{
+        try{
+          // Try to unlock both HTMLAudio and TTS
+          await elAudio.play().catch(()=>{});
+          elAudio.pause();
+          if('speechSynthesis' in window){
+            const test = new SpeechSynthesisUtterance('');
+            window.speechSynthesis.cancel();
+            window.speechSynthesis.speak(test);
+            setTimeout(()=> window.speechSynthesis.cancel(), 50);
+          }
+          audioUnlocked = true;
+          elUnlock.hidden = true;
+          res();
+        }catch(_){ /* keep overlay visible */ }
+      };
+    });
+  }
   </script>
 </body>
 </html>
