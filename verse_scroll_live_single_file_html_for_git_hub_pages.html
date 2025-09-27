@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Verse Scroll Live</title>
+  <style>
+    :root {
+      --bg: #f2e3c3;           /* parchment base */
+      --ink: #3b2f2f;          /* main text color */
+      --fade: rgba(59,47,47,.45);
+      --accent: #7a5c37;       /* borders/shadows */
+      --maxw: 780px;           /* readable width */
+    }
+    html, body { height: 100%; }
+    body {
+      margin: 0; background: var(--bg) url('parchment.jpg') center/cover fixed no-repeat;
+      /* Fallback texture if you host your parchment as parchment.jpg in the same folder.
+         If you don’t have a file, it’ll just use the solid color. */
+      font-family: ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
+      color: var(--ink);
+      -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+    }
+    .edge-vignette::before {
+      content:""; position: fixed; inset: 0; pointer-events:none;
+      box-shadow: inset 0 0 140px rgba(0,0,0,.22);
+    }
+
+    /* Layout */
+    .wrap { display:flex; flex-direction:column; align-items:center; justify-content:center; min-height:100%; padding: 4vmin 3vmin 18vmin; }
+    .frame { width: min(94vw, var(--maxw)); position: relative; }
+
+    /* Decorative scroll frame */
+    .scroll {
+      position: relative; padding: 8vmin 6vmin; border-radius: 22px; background: radial-gradient(120% 120% at 50% -10%, rgba(255,255,255,.28), transparent 60%), rgba(255,255,255,.18);
+      box-shadow: 0 1px 1px rgba(0,0,0,.05), 0 16px 60px rgba(0,0,0,.25) inset;
+      overflow: hidden;
+    }
+    .scroll::before, .scroll::after{ /* top/bottom rods */
+      content:""; position:absolute; left: 6vmin; right: 6vmin; height: 10px; border-radius: 8px;
+      background: linear-gradient(180deg, #a47b48, #6d4a25);
+      box-shadow: 0 2px 6px rgba(0,0,0,.25);
+    }
+    .scroll::before{ top: 2vmin; }
+    .scroll::after{ bottom: 2vmin; }
+
+    /* The 3-line “now/prev/next” stack */
+    .stack { height: 60vh; display:grid; grid-template-rows: 1fr auto 1fr; align-items:center; justify-items:center; text-align:center; gap: 2.2vmin; }
+    .prev, .next { max-width: 58ch; font-size: clamp(14px, 2.6vmin, 19px); line-height: 1.45; color: var(--fade); filter: blur(.15px); }
+    .curr { max-width: 62ch; font-size: clamp(18px, 3.6vmin, 28px); line-height: 1.5; font-variation-settings: 'wght' 560; }
+
+    .ref { margin-top: 1.2vmin; font-size: .9em; letter-spacing: .02em; opacity: .8; }
+
+    /* Subtle auto-scroll illusion between items */
+    .stack.anim { transition: transform 700ms cubic-bezier(.2,.7,.2,1); }
+
+    /* HUD controls (can be hidden during real live) */
+    .hud { position: fixed; left: 50%; transform: translateX(-50%); bottom: 2.2vmin; width: min(96vw, var(--maxw)); background: rgba(255,255,255,.55); backdrop-filter: blur(6px); border: 1px solid rgba(0,0,0,.07); box-shadow: 0 6px 24px rgba(0,0,0,.18); border-radius: 14px; padding: 10px; display:grid; grid-template-columns: 1fr auto auto auto; gap: 8px; align-items:center; }
+    .hud input[type=text]{ width:100%; border:1px solid rgba(0,0,0,.12); border-radius: 10px; padding: 10px 12px; background: rgba(255,255,255,.85); }
+    .hud button, .hud select { border:1px solid rgba(0,0,0,.12); border-radius: 10px; padding: 9px 12px; background: #fff4; cursor: pointer; }
+    .label { font-size: 12px; opacity: .75; margin-right: 8px; }
+
+    .status { position: fixed; top: 10px; right: 10px; font-size: 12px; opacity:.75; }
+  </style>
+</head>
+<body>
+  <div class="edge-vignette"></div>
+  <div class="wrap">
+    <div class="frame">
+      <div class="scroll">
+        <div id="stack" class="stack">
+          <div id="prev" class="prev"></div>
+          <div>
+            <div id="curr" class="curr">Waiting for first request…</div>
+            <div id="currRef" class="ref"></div>
+          </div>
+          <div id="next" class="next"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Heads-up-display for testing / manual enqueue (hide before going live) -->
+  <div class="hud" id="hud">
+    <input id="manualInput" type="text" placeholder="Type a reference like: John 3:16 or Psalm 23:1-3" />
+    <button id="enqueueBtn">Enqueue</button>
+    <select id="voiceSel"></select>
+    <div>
+      <span class="label">Vol</span>
+      <input id="vol" type="range" min="0" max="1" step="0.01" value="1" />
+    </div>
+  </div>
+
+  <div class="status" id="status">Disconnected</div>
+
+  <audio id="player" preload="auto"></audio>
+
+  <script>
+  /* =====================
+     CONFIG (edit these)
+     ===================== */
+  const WS_URL = 'wss://YOUR_SERVER/ws';  // <- replace with your websocket endpoint (or leave blank to disable)
+  const DEFAULT_TRANSLATION = 'kjv';       // bible-api.com supports: kjv, web, etc.
+  const MIN_GAP_MS = 2500;                // brief breathing room between items (if using native TTS)
+  const AUTOSCROLL_MS = 700;              // UI transition timing (keep in sync with CSS)
+
+  /* =====================
+     STATE
+     ===================== */
+  const q = []; // queue of { ref, text, audioUrl, user }
+  let playing = false;
+  let ws;
+
+  // DOM refs
+  const elPrev = document.getElementById('prev');
+  const elCurr = document.getElementById('curr');
+  const elCurrRef = document.getElementById('currRef');
+  const elNext = document.getElementById('next');
+  const elStack = document.getElementById('stack');
+  const elStatus = document.getElementById('status');
+  const elAudio = document.getElementById('player');
+  const elVol = document.getElementById('vol');
+
+  // HUD
+  const input = document.getElementById('manualInput');
+  const btn = document.getElementById('enqueueBtn');
+  const voiceSel = document.getElementById('voiceSel');
+
+  /* =====================
+     UTILITIES
+     ===================== */
+  function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
+  function titleCase(s){ return s.replace(/\b([a-z])([a-z]*)/gi, (_,a,b)=>a.toUpperCase()+b.toLowerCase()); }
+  function normalizeRef(raw){
+    // Normalize user refs like "john 3:16" or "psalm 23:1-3"
+    const s = raw.trim().replace(/\s+/g,' ');
+    return titleCase(s);
+  }
+  function isVerseRef(s){ return /\b\w+\s+\d{1,3}:\d{1,3}(-\d{1,3})?\b/.test(s); }
+
+  async function fetchVerseText(ref){
+    // Use Bible API (public KJV). Example: https://bible-api.com/John%203:16?translation=kjv
+    const url = `https://bible-api.com/${encodeURIComponent(ref)}?translation=${DEFAULT_TRANSLATION}`;
+    const r = await fetch(url);
+    if(!r.ok) throw new Error('Verse not found');
+    const j = await r.json();
+    if(j.text) return j.text.trim().replace(/\s+/g,' ');
+    if(Array.isArray(j.verses)) return j.verses.map(v=>v.text.trim()).join(' ').replace(/\s+/g,' ');
+    throw new Error('Unexpected API response');
+  }
+
+  /* =====================
+     QUEUE + UI
+     ===================== */
+  function updatePreview(){
+    elPrev.textContent = q.length>0 && q[0]._played ? q[0]._played.text : '';
+    elNext.textContent = q.length>0 && !q[0]._played ? q[0].text || q[0].ref : (q[1]?.text || q[1]?.ref || '');
+  }
+
+  async function showCurrent(item){
+    elCurr.textContent = item.text || item.ref;
+    elCurrRef.textContent = item.text ? item.ref : '';
+  }
+
+  async function playItem(item){
+    // Prefer provided audioUrl. Otherwise use Web Speech API as a Chromebook-friendly fallback.
+    await showCurrent(item);
+    updatePreview();
+
+    if(item.audioUrl){
+      elAudio.volume = parseFloat(elVol.value || '1');
+      elAudio.src = item.audioUrl;
+      await elAudio.play().catch(()=>{});
+      await new Promise(res=>{ elAudio.onended = ()=>res(); });
+      return;
+    }
+
+    // Web Speech API (client-side TTS). Note: voices are device/browser-dependent.
+    if('speechSynthesis' in window){
+      const utter = new SpeechSynthesisUtterance(item.text || item.ref);
+      utter.rate = 0.95; utter.pitch = 1.0; utter.volume = parseFloat(elVol.value || '1');
+      const v = speechSynthesis.getVoices().find(v=>/en(.*)US/i.test(v.lang)) || speechSynthesis.getVoices()[0];
+      if(v) utter.voice = v;
+      const endP = new Promise(res=> utter.onend = res);
+      window.speechSynthesis.cancel();
+      window.speechSynthesis.speak(utter);
+      await endP;
+    } else {
+      // If no TTS, just pause a bit so UI advances
+      await sleep(4000);
+    }
+  }
+
+  async function pump(){
+    if(playing) return;
+    playing = true;
+    while(q.length){
+      const item = q.shift();
+      // fetch verse text on-demand if missing
+      if(!item.text){
+        try { item.text = await fetchVerseText(item.ref); }
+        catch(e){ item.text = `Could not fetch: ${item.ref}`; }
+      }
+      // Animate stack up (prev <- curr <- next)
+      elStack.classList.add('anim');
+      elStack.style.transform = 'translateY(-12%)';
+      await sleep(AUTOSCROLL_MS);
+      elStack.classList.remove('anim');
+      elStack.style.transform = 'translateY(0)';
+
+      await playItem(item);
+      await sleep(MIN_GAP_MS);
+
+      // mark last played so it shows in PREV slot
+      item._played = { text: `${item.text} — ${item.ref}` };
+      q.unshift(item); // temporarily put back to show as prev
+      updatePreview();
+      q.shift();
+    }
+    playing = false;
+  }
+
+  function enqueue(ref, opts={}){
+    const norm = normalizeRef(ref);
+    q.push({ ref: norm, text: opts.text, audioUrl: opts.audioUrl, user: opts.user });
+    updatePreview();
+    pump();
+  }
+
+  /* =====================
+     WEBSOCKET (optional)
+     ===================== */
+  function connectWS(){
+    if(!WS_URL || WS_URL.startsWith('wss://YOUR_SERVER')) return;
+    ws = new WebSocket(WS_URL);
+    ws.onopen = ()=>{ elStatus.textContent = 'Connected'; };
+    ws.onclose = ()=>{ elStatus.textContent = 'Disconnected'; setTimeout(connectWS, 2500); };
+    ws.onerror = ()=>{ elStatus.textContent = 'Error'; };
+    ws.onmessage = (evt)=>{
+      try{
+        const msg = JSON.parse(evt.data);
+        if(msg.type === 'read' && msg.ref){ enqueue(msg.ref, { text: msg.text, audioUrl: msg.audioUrl, user: msg.user }); }
+        if(msg.type === 'bulk' && Array.isArray(msg.items)){
+          msg.items.forEach(it=> enqueue(it.ref, { text: it.text, audioUrl: it.audioUrl, user: it.user }));
+        }
+        if(msg.type === 'clear'){ q.length = 0; }
+      }catch(e){ console.warn('Bad message', e); }
+    };
+  }
+
+  /* =====================
+     HUD / DEMO CONTROLS
+     ===================== */
+  btn.addEventListener('click', async ()=>{
+    const v = input.value.trim();
+    if(!v) return; input.value = '';
+    if(!isVerseRef(v)) { enqueue(v); return; }
+    enqueue(v);
+  });
+
+  elVol.addEventListener('input', ()=>{
+    elAudio.volume = parseFloat(elVol.value || '1');
+  });
+
+  function populateVoices(){
+    const voices = speechSynthesis.getVoices();
+    voiceSel.innerHTML = '';
+    voices.forEach((v,i)=>{
+      const opt = document.createElement('option');
+      opt.value = v.name; opt.textContent = `${v.name} — ${v.lang}`;
+      voiceSel.appendChild(opt);
+    });
+  }
+  if('speechSynthesis' in window){
+    speechSynthesis.onvoiceschanged = populateVoices; populateVoices();
+  } else {
+    voiceSel.style.display='none';
+  }
+
+  // Optional: pick selected voice for speechSynthesis
+  voiceSel.addEventListener('change', ()=>{
+    const name = voiceSel.value;
+    const pick = speechSynthesis.getVoices().find(v=>v.name===name);
+    if(pick) window._preferredVoice = pick;
+  });
+
+  // Use preferred voice if set
+  (function patchSpeak(){
+    if(!('speechSynthesis' in window)) return;
+    const origSpeak = window.speechSynthesis.speak.bind(window.speechSynthesis);
+    window.speechSynthesis.speak = (utt)=>{ if(window._preferredVoice) utt.voice = window._preferredVoice; return origSpeak(utt); };
+  })();
+
+  // Auto-demo if ?demo=1
+  if(new URLSearchParams(location.search).get('demo')==='1'){
+    enqueue('Psalm 23:1-3');
+    enqueue('John 14:1-3');
+    enqueue('Philippians 4:6-7');
+  }
+
+  connectWS();
+  </script>
+</body>
+</html>
