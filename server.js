@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import express from 'express';
 import { WebSocketServer } from 'ws';
-import TikTokLiveConnection from 'tiktok-live-connector';
+import { WebcastPushConnection } from 'tiktok-live-connector';
 
 const PORT = process.env.PORT || 8080;
 const HANDLE = process.env.TIKTOK_USERNAME;
@@ -76,7 +76,7 @@ function allowedToEnqueue(userId) {
 }
 
 // --- TikTok Chat Listener ---
-const tiktok = new TikTokLiveConnection(HANDLE, {
+const tiktok = new WebcastPushConnection(HANDLE, {
   enableExtendedGiftInfo: false,
   requestOptions: { timeout: 10000 }
 });
