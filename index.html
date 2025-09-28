@@ -187,29 +187,38 @@
     }
 
     // ===== AUDIO UNLOCK =====
-    async function ensureAudioUnlocked() {
-      if (audioUnlocked) return;
-      elUnlock.hidden = false;
-      await new Promise(resolve => {
-        elUnlockBtn.onclick = async () => {
-          try { await elAudio.play(); } catch (_) {}
-          try { elAudio.pause(); } catch (_) {}
-          if ('speechSynthesis' in window) {
-            try {
-              const test = new SpeechSynthesisUtterance(' ');
-              try { window.speechSynthesis.cancel(); } catch (_) {}
-              try { window.speechSynthesis.speak(test); } catch (_) {}
-              setTimeout(() => {
-                try { window.speechSynthesis.cancel(); } catch (_) {}
-              }, 60);
-            } catch (_) {}
-          }
-          audioUnlocked = true;
-          elUnlock.hidden = true;
-          resolve();
-        };
-      });
+    // Attach the click handler once at startup
+function attachUnlockHandler() {
+  if (!elUnlockBtn) return;
+  elUnlockBtn.onclick = async () => {
+    // Try to unlock <audio>
+    try { await elAudio.play(); } catch (_) {}
+    try { elAudio.pause(); } catch (_) {}
+
+    // Try to tickle TTS
+    if ('speechSynthesis' in window) {
+      try {
+        const test = new SpeechSynthesisUtterance(' ');
+        try { window.speechSynthesis.cancel(); } catch (_) {}
+        try { window.speechSynthesis.speak(test); } catch (_) {}
+        setTimeout(() => { try { window.speechSynthesis.cancel(); } catch (_) {} }, 60);
+      } catch (_) {}
     }
+
+    audioUnlocked = true;
+    elUnlock.hidden = true;
+  };
+}
+attachUnlockHandler();
+
+// Called by the player logic before speaking/playing
+async function ensureAudioUnlocked() {
+  if (audioUnlocked) return;
+  elUnlock.hidden = false;          // just show overlay; handler is already attached
+  // wait until user clicks Enable
+  while (!audioUnlocked) { await new Promise(r => setTimeout(r, 100)); }
+}
+
 
     // ===== WS CONNECT =====
     let ws;
