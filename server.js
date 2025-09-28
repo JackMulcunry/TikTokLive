@@ -81,25 +81,45 @@ const tiktok = new WebcastPushConnection(HANDLE, {
   requestOptions: { timeout: 10000 }
 });
 
-tiktok
-  .connect()
-  .then(state => console.log(`Connected to @${HANDLE}`, state?.roomId ? `(room ${state.roomId})` : ''))
-  .catch(err => console.error('Failed to connect:', err?.message || err));
+// retry connector: keeps trying until you go live, and reconnects on drops
+async function connectTikTok(retryMs = 15000) {
+  try {
+    const state = await tiktok.connect();
+    console.log(`Connected to @${HANDLE}`, state?.roomId ? `(room ${state.roomId})` : '');
+  } catch (err) {
+    console.warn('TikTok connect failed:', err?.message || err);
+    setTimeout(() => connectTikTok(retryMs), retryMs);
+  }
+}
+connectTikTok();
 
-tiktok.on('disconnected', () => console.warn('Disconnected—reconnecting…'));
-tiktok.on('liveEnd', () => console.warn('Live ended.'));
+tiktok.on('disconnected', () => {
+  console.warn('Disconnected — retrying in 15s…');
+  setTimeout(() => connectTikTok(15000), 15000);
+});
+tiktok.on('liveEnd',   () => console.warn('Live ended.'));
 tiktok.on('streamEnd', () => console.warn('Stream ended.'));
+
+const VERSE_RE = /\b[0-9a-zA-Z]+\s+\d{1,3}:\d{1,3}(?:-\d{1,3})?\b/i;
+function looksLikeVerse(s=''){ return VERSE_RE.test(s); }
+function clampRange(ref){
+  const m = ref.match(/^(.*?:)(\d+)-(\d+)$/i);
+  if (!m) return ref;
+  const [, prefix, a, b] = m;
+  const A = parseInt(a, 10), B = parseInt(b, 10);
+  return (Number.isFinite(A) && Number.isFinite(B) && B - A > MAX_RANGE_SPAN)
+    ? `${prefix}${A}-${A + MAX_RANGE_SPAN}`
+    : ref;
+}
 
 tiktok.on('chat', data => {
   try {
     const userId = String(data?.userId || data?.uniqueId || 'anon');
     const text = String(data?.comment || '').trim();
+    if (!looksLikeVerse(text)) return;
+    if (!allowedToEnqueue(userId)) return;
 
-    if (!looksLikeVerse(text)) return; // ignore non-verse chat
-
-    if (!allowedToEnqueue(userId)) return; // cooldowns
-
-    // Normalize simple oddities (allow "john3:16" → "john 3:16")
+    // normalize: "john3:16" -> "john 3:16"
     const norm = text.replace(/([a-zA-Z])(\d)/, '$1 $2');
     const safe = clampRange(norm);
 
@@ -109,6 +129,7 @@ tiktok.on('chat', data => {
     console.error('chat handler error', e);
   }
 });
+
 
 
 
