@@ -9,7 +9,7 @@ const HANDLE = (process.env.TIKTOK_USERNAME || '').trim(); // uniqueId (no @)
 const ADMIN_TOKEN = (process.env.ADMIN_TOKEN || '').trim();
 
 const app = express();
-app.use(cors());                 // allow calls from your GitHub Pages origin
+app.use(cors());
 app.use(express.json());
 
 // ---------- HTTP ROUTES ----------
@@ -26,7 +26,6 @@ app.get('/', (_req, res) => {
 
 app.get('/health', (_req, res) => res.json({ ok: true }));
 
-// Optional protected manual injection for testing
 app.post('/inject', (req, res) => {
   const auth = req.headers.authorization || '';
   if (!ADMIN_TOKEN || auth !== `Bearer ${ADMIN_TOKEN}`) {
@@ -54,18 +53,15 @@ function broadcast(obj) {
 
 // ---------- TikTok CHAT (optional / auto-retry) ----------
 const VERSE_RE = /\b[0-9a-zA-Z]+\s+\d{1,3}:\d{1,3}(?:-\d{1,3})?\b/i;
-const USER_COOLDOWN_MS = 75_000;        // per-user cooldown
-const GLOBAL_MIN_INTERVAL_MS = 12_000;  // global pace gate
-const MAX_RANGE_SPAN = 5;               // cap A-B to <=5 verses
+const USER_COOLDOWN_MS = 75_000;
+const GLOBAL_MIN_INTERVAL_MS = 12_000;
+const MAX_RANGE_SPAN = 5;
 
-const recentUsers = new Map(); // userId -> lastTimestamp
+const recentUsers = new Map();
 let lastGlobal = 0;
 
-function looksLikeVerse(s = '') {
-  return VERSE_RE.test(s);
-}
+function looksLikeVerse(s = '') { return VERSE_RE.test(s); }
 function clampRange(ref) {
-  // "John 3:1-99" -> cap to 5 verses span
   const m = ref.match(/^(.*?:)(\d+)-(\d+)$/i);
   if (!m) return ref;
   const [, prefix, a, b] = m;
@@ -83,15 +79,11 @@ function allowedToEnqueue(userId) {
   lastGlobal = now;
   return true;
 }
-function normalizeInline(s) {
-  // allow "john3:16" -> "john 3:16"
-  return s.replace(/([a-zA-Z])(\d)/, '$1 $2');
-}
+function normalizeInline(s) { return s.replace(/([a-zA-Z])(\d)/, '$1 $2'); }
 
 // Only start connector if a handle is provided
-let tiktok;
 if (HANDLE) {
-  tiktok = new WebcastPushConnection(HANDLE, {
+  const tiktok = new WebcastPushConnection(HANDLE, {
     enableExtendedGiftInfo: false,
     requestOptions: { timeout: 10000 }
   });
@@ -102,7 +94,7 @@ if (HANDLE) {
       console.log(`Connected to @${HANDLE}`, state?.roomId ? `(room ${state.roomId})` : '');
     } catch (err) {
       console.warn('TikTok connect failed:', err?.message || err);
-      setTimeout(connectTikTok, 15000); // retry quietly
+      setTimeout(connectTikTok, 15000);
     }
   }
   connectTikTok();
@@ -111,7 +103,6 @@ if (HANDLE) {
     console.warn('TikTok disconnected — retrying in 15s…');
     setTimeout(connectTikTok, 15000);
   });
-
   tiktok.on('streamEnd', () => console.warn('TikTok stream ended'));
   tiktok.on('liveEnd', () => console.warn('TikTok live ended'));
 
@@ -124,7 +115,6 @@ if (HANDLE) {
 
       const norm = normalizeInline(text);
       const safe = clampRange(norm);
-
       console.log(`Queue: ${safe} (from ${data?.uniqueId || 'user'})`);
       broadcast({ type: 'read', ref: safe, user: data?.uniqueId || 'user' });
     } catch (e) {
