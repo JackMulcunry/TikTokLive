@@ -1,51 +1,154 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
+  <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Verse Scroll Live</title>
+  <title>Verse Scroll Live – Production</title>
   <style>
-    :root { --bg:#d8c6a0; --panel:#fdf6e3; --ink:#2b2114; }
+    :root { --bg:#f2e3c3; --ink:#3b2f2f; --fade:rgba(59,47,47,.45); --maxw:780px; }
     html,body{height:100%}
-    body{margin:0; font-family: Georgia, Cambria, 'Times New Roman', serif; background:#d8c6a0; overflow:hidden; display:flex; align-items:center; justify-content:center}
-    .edge{position:fixed; inset:0; background: radial-gradient(ellipse at center, var(--bg) 70%, #b8a377 100%) }
-    .wrap{position:relative; z-index:1; background:var(--panel); width:min(92vw,860px); border-radius:16px; padding:44px 40px; box-shadow:0 20px 60px rgba(0,0,0,.35)}
-    .rod{position:absolute; left:44px; right:44px; height:10px; border-radius:8px; background:linear-gradient(180deg,#a47b48,#6d4a25); box-shadow:0 2px 6px rgba(0,0,0,.25)}
-    .rod.top{top:20px} .rod.bot{bottom:20px}
-    .verse{font-size: clamp(18px, 3.6vmin, 28px); line-height:1.5; color:var(--ink); text-align:center}
-    .ref{margin-top:10px; color:#6a5d47; text-align:center}
-    .preview{opacity:.45; font-size: clamp(14px, 2.4vmin, 18px); text-align:center; margin-bottom:18px}
-    #dot{position:fixed; top:10px; right:10px; width:10px; height:10px; border-radius:50%; background:#c33; opacity:.7}
-
-    /* Unlock overlay */
-    .unlock{position:fixed; inset:0; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,.35); backdrop-filter: blur(4px)}
-    .unlock .card{background:#fff; color:#333; padding:18px 22px; border-radius:14px; box-shadow:0 8px 40px rgba(0,0,0,.25); text-align:center; max-width:90vw}
-    .unlock button{margin-top:10px; padding:10px 14px; border-radius:10px; border:1px solid #ddd; cursor:pointer}
+    body{margin:0; background:var(--bg) url('parchment.jpg') center/cover fixed no-repeat; font-family: ui-serif, Georgia, Cambria, "Times New Roman", Times, serif; color:var(--ink); -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility; overflow:hidden}
+    .edge::before{content:""; position:fixed; inset:0; pointer-events:none; box-shadow: inset 0 0 140px rgba(0,0,0,.22)}
+    .wrap{min-height:100%; display:flex; align-items:center; justify-content:center; padding:4vmin 3vmin}
+    .frame{width:min(94vw,var(--maxw)); position:relative}
+    .scroll{position:relative; padding:8vmin 6vmin; border-radius:22px; background: radial-gradient(120% 120% at 50% -10%, rgba(255,255,255,.28), transparent 60%), rgba(255,255,255,.18); box-shadow:0 1px 1px rgba(0,0,0,.05), 0 16px 60px rgba(0,0,0,.25) inset; overflow:hidden}
+    .scroll::before,.scroll::after{content:""; position:absolute; left:6vmin; right:6vmin; height:10px; border-radius:8px; background:linear-gradient(180deg,#a47b48,#6d4a25); box-shadow:0 2px 6px rgba(0,0,0,.25)}
+    .scroll::before{top:2vmin} .scroll::after{bottom:2vmin}
+    .stack{height:60vh; display:grid; grid-template-rows:1fr auto 1fr; align-items:center; justify-items:center; text-align:center; gap:2.2vmin; user-select:none}
+    .prev,.next{max-width:58ch; font-size:clamp(14px,2.6vmin,19px); line-height:1.45; color:var(--fade); filter:blur(.15px)}
+    .curr{max-width:62ch; font-size:clamp(18px,3.6vmin,28px); line-height:1.5; font-variation-settings:'wght' 560}
+    .ref{margin-top:1.2vmin; font-size:.9em; letter-spacing:.02em; opacity:.8}
+    .stack.anim{transition:transform 700ms cubic-bezier(.2,.7,.2,1)}
   </style>
 </head>
 <body>
   <div class="edge"></div>
   <div class="wrap">
-    <div class="rod top"></div>
-    <div id="preview" class="preview"></div>
-    <div id="current" class="verse">Waiting for first request…</div>
-    <div id="ref" class="ref"></div>
-    <div class="rod bot"></div>
-  </div>
-
-  <audio id="player" preload="auto"></audio>
-  <div id="dot"></div>
-
-  <!-- Audio unlock overlay -->
-  <div id="unlock" class="unlock" hidden>
-    <div class="card">
-      <div><strong>Enable audio</strong></div>
-      <div>Tap once so verses can be read aloud.</div>
-      <button id="unlockBtn" onclick="enableAudio()">Enable</button>
+    <div class="frame">
+      <div class="scroll">
+        <div id="stack" class="stack" aria-hidden="true">
+          <div id="prev" class="prev"></div>
+          <div>
+            <div id="curr" class="curr">Waiting for first request…</div>
+            <div id="currRef" class="ref"></div>
+          </div>
+          <div id="next" class="next"></div>
+        </div>
+      </div>
     </div>
   </div>
 
-  <script src="./app.js"></script>
+  <audio id="player" preload="auto"></audio>
+
+  <script>
+  // ===== CONFIG =====
+  const WS_URL = 'wss://YOUR_SERVER/ws';           // <- set to your WebSocket endpoint
+  const DEFAULT_TRANSLATION = 'kjv';               // bible-api.com translation
+  const MIN_GAP_MS = 2500;                          // pause between items
+  const AUTOSCROLL_MS = 700;                        // UI transition time (matches CSS)
+
+  // ===== STATE =====
+  const q = []; // queue of {ref, text, audioUrl, user}
+  let playing = false; let ws;
+  const elPrev = document.getElementById('prev');
+  const elCurr = document.getElementById('curr');
+  const elCurrRef = document.getElementById('currRef');
+  const elNext = document.getElementById('next');
+  const elStack = document.getElementById('stack');
+  const elAudio = document.getElementById('player');
+
+  // ===== UTIL =====
+  const sleep = (ms)=>new Promise(r=>setTimeout(r,ms));
+  const titleCase = (s)=> s.replace(/\b([a-z])([a-z]*)/gi, (_,a,b)=>a.toUpperCase()+b.toLowerCase());
+  function normalizeRef(raw){
+    // Accept case-insensitive inputs like "john 3:16" → "John 3:16"
+    const s = String(raw||'').trim().toLowerCase().replace(/\s+/g,' ');
+    return titleCase(s);
+  }
+  function isVerseRef(s){ return /\b[0-9a-zA-Z]+\s+\d{1,3}:\d{1,3}(-\d{1,3})?\b/i.test(s||''); }
+
+  async function fetchVerseText(ref){
+    const url = `https://bible-api.com/${encodeURIComponent(ref)}?translation=${DEFAULT_TRANSLATION}`;
+    const r = await fetch(url); if(!r.ok) throw new Error('Verse not found');
+    const j = await r.json();
+    if(j.text) return j.text.trim().replace(/\s+/g,' ');
+    if(Array.isArray(j.verses)) return j.verses.map(v=>v.text.trim()).join(' ').replace(/\s+/g,' ');
+    throw new Error('Unexpected API response');
+  }
+
+  function updatePreview(){
+    elPrev.textContent = q.length>0 && q[0]._played ? q[0]._played.text : '';
+    elNext.textContent = q.length>0 && !q[0]._played ? (q[0].text || q[0].ref) : (q[1]?.text || q[1]?.ref || '');
+  }
+
+  async function showCurrent(item){
+    elCurr.textContent = item.text || item.ref;
+    elCurrRef.textContent = item.text ? item.ref : '';
+  }
+
+  async function playItem(item){
+    await showCurrent(item); updatePreview();
+    elAudio.volume = 1; // fixed for production
+
+    if(item.audioUrl){
+      elAudio.src = item.audioUrl; try{ await elAudio.play(); }catch(e){}
+      await new Promise(res=> elAudio.onended = res);
+      return;
+    }
+
+    // Fallback: browser TTS (device-dependent). If unavailable, just pause.
+    if('speechSynthesis' in window){
+      const utt = new SpeechSynthesisUtterance(item.text || item.ref);
+      utt.rate = 0.95; utt.pitch = 1.0; utt.volume = 1;
+      const endP = new Promise(res=> utt.onend = res);
+      window.speechSynthesis.cancel(); window.speechSynthesis.speak(utt);
+      await endP;
+    } else {
+      await sleep(4000);
+    }
+  }
+
+  async function pump(){
+    if(playing) return; playing = true;
+    while(q.length){
+      const item = q.shift();
+      if(!item.text){ try{ item.text = await fetchVerseText(item.ref); } catch{ item.text = `Could not fetch: ${item.ref}`; } }
+      // UI bump
+      elStack.classList.add('anim'); elStack.style.transform = 'translateY(-12%)';
+      await sleep(AUTOSCROLL_MS);
+      elStack.classList.remove('anim'); elStack.style.transform = 'translateY(0)';
+
+      await playItem(item); await sleep(MIN_GAP_MS);
+      item._played = { text: `${item.text} — ${item.ref}` };
+      q.unshift(item); updatePreview(); q.shift();
+    }
+    playing = false;
+  }
+
+  function enqueue(ref, opts={}){
+    if(!ref) return; const norm = normalizeRef(ref);
+    q.push({ ref: norm, text: opts.text, audioUrl: opts.audioUrl, user: opts.user });
+    updatePreview(); pump();
+  }
+
+  // ===== WS (no UI controls; only programmatic input) =====
+  function connectWS(){
+    if(!WS_URL || WS_URL.startsWith('wss://YOUR_SERVER')) return; // disabled until configured
+    ws = new WebSocket(WS_URL);
+    ws.onopen = ()=>{};
+    ws.onclose = ()=> setTimeout(connectWS, 2500);
+    ws.onmessage = (evt)=>{
+      try{
+        const msg = JSON.parse(evt.data);
+        if(msg.type === 'read' && msg.ref){ enqueue(msg.ref, { text: msg.text, audioUrl: msg.audioUrl, user: msg.user }); }
+        if(msg.type === 'bulk' && Array.isArray(msg.items)) msg.items.forEach(it=> enqueue(it.ref, { text: it.text, audioUrl: it.audioUrl, user: it.user }));
+        if(msg.type === 'clear'){ q.length = 0; }
+      }catch(e){ /* ignore bad messages */ }
+    };
+  }
+
+  // No demo, no HUD, no keyboard handlers. Pure display.
+  connectWS();
+  </script>
 </body>
 </html>
-
