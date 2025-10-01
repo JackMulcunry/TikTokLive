@@ -130,8 +130,15 @@
     if(playing) return; playing = true;
     while(q.length){
       const item = q.shift();
-      if(!item.text){ try{ item.text = await fetchVerseText(item.ref); } catch{ item.text = `Could not fetch: ${item.ref}`; } }
-      // UI bump
+      if (!item.text) {
+  if (!isVerseRef(item.ref)) {
+    // skip this item entirely if it’s not a valid reference
+    continue; // (inside the while loop)
+  }
+  try { item.text = await fetchVerseText(item.ref); }
+  catch { item.text = item.ref; } // fall back to reading the ref itself
+}
+
       elStack.classList.add('anim'); elStack.style.transform = 'translateY(-12%)';
       await sleep(AUTOSCROLL_MS);
       elStack.classList.remove('anim'); elStack.style.transform = 'translateY(0)';
