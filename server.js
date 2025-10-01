@@ -121,6 +121,24 @@ tiktok.on('chat', (data) => {
   } catch (e) {
     console.error('chat handler error', e);
   }
+
+  // Auto-verse trigger (to prevent inactivity)
+const KEEPALIVE_INTERVAL = 60_000; // every 60s
+const AUTO_VERSES = [
+  "John 3:16",
+  "Psalm 23:1",
+  "Romans 12:2",
+  "Proverbs 3:5",
+  "Philippians 4:13"
+];
+
+setInterval(() => {
+  // Only inject if nothing else is in flight
+  const verse = AUTO_VERSES[Math.floor(Math.random() * AUTO_VERSES.length)];
+  console.log(`[auto] Injecting keepalive verse: ${verse}`);
+  broadcast({ type: 'read', ref: verse, user: 'auto' });
+}, KEEPALIVE_INTERVAL);
+
 });
 
 
