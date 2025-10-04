@@ -5,39 +5,80 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Verse Scroll Live – Production</title>
   <style>
-    :root { --bg:#f2e3c3; --ink:#3b2f2f; --fade:rgba(59,47,47,.45); --maxw:780px; }
+    :root {
+      --bg:#f2e3c3; --ink:#3b2f2f; --fade:rgba(59,47,47,.45); --maxw:780px;
+      --hue: 0deg; /* updated each verse */
+    }
     html,body{height:100%}
-    body{margin:0; background:var(--bg) url('parchment.jpg') center/cover fixed no-repeat; font-family: ui-serif, Georgia, Cambria, "Times New Roman", Times, serif; color:var(--ink); -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility; overflow:hidden}
-    .edge::before{content:""; position:fixed; inset:0; pointer-events:none; box-shadow: inset 0 0 140px rgba(0,0,0,.22)}
-    .wrap{min-height:100%; display:flex; align-items:center; justify-content:center; padding:4vmin 3vmin}
+    body{
+      margin:0; background:var(--bg); color:var(--ink);
+      font-family: ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
+      -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility; overflow:hidden
+    }
+
+    /* Moving clouds (constant motion) */
+    .sky{position:fixed; inset:0; z-index:0; pointer-events:none; overflow:hidden}
+    .cloud{position:absolute; inset:0; opacity:.12; background-repeat:repeat-x; background-position:0 0}
+    .layer1{
+      background-image:url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="900" height="180" viewBox="0 0 900 180"><g fill="%23ffffff" opacity="0.9"><ellipse cx="120" cy="90" rx="120" ry="48"/><ellipse cx="300" cy="80" rx="140" ry="54"/><ellipse cx="520" cy="95" rx="170" ry="60"/><ellipse cx="780" cy="85" rx="150" ry="56"/></g></svg>');
+      background-size:900px 180px; animation:drift 75s linear infinite;
+    }
+    .layer2{
+      background-image:url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="220" viewBox="0 0 1000 220"><g fill="%23ffffff" opacity="0.8"><ellipse cx="160" cy="110" rx="150" ry="56"/><ellipse cx="420" cy="105" rx="190" ry="70"/><ellipse cx="720" cy="112" rx="200" ry="72"/><ellipse cx="940" cy="108" rx="150" ry="58"/></g></svg>');
+      background-size:1000px 220px; opacity:.16; top:8%;
+      animation:drift 120s linear infinite reverse;
+    }
+    @keyframes drift{from{background-position:0 0}to{background-position:-1200px 0}}
+
+    .edge::before{
+      content:""; position:fixed; inset:0; pointer-events:none;
+      box-shadow: inset 0 0 140px rgba(0,0,0,.22);
+      filter: hue-rotate(var(--hue)); transition: filter .6s ease;
+    }
+    .wrap{min-height:100%; display:flex; align-items:center; justify-content:center; padding:4vmin 3vmin; position:relative; z-index:1}
     .frame{width:min(94vw,var(--maxw)); position:relative}
 
-    /* Header */
     .headline{
-      text-align:center;
-      font-size:clamp(16px,2.6vmin,20px);
-      letter-spacing:.02em;
-      opacity:.9;
-      margin:0 0 1.2rem 0;
-      line-height:1.35;
+      text-align:center; font-size:clamp(16px,2.6vmin,20px);
+      letter-spacing:.02em; opacity:.9; margin:0 0 1.2rem 0; line-height:1.35;
     }
     .headline .ex{opacity:.75}
 
-    .scroll{position:relative; padding:8vmin 6vmin; border-radius:22px; background: radial-gradient(120% 120% at 50% -10%, rgba(255,255,255,.28), transparent 60%), rgba(255,255,255,.18); box-shadow:0 1px 1px rgba(0,0,0,.05), 0 16px 60px rgba(0,0,0,.25) inset; overflow:hidden}
+    .scroll{
+      position:relative; padding:8vmin 6vmin; border-radius:22px;
+      background: radial-gradient(120% 120% at 50% -10%, rgba(255,255,255,.28), transparent 60%), rgba(255,255,255,.18);
+      box-shadow:0 1px 1px rgba(0,0,0,.05), 0 16px 60px rgba(0,0,0,.25) inset; overflow:hidden;
+      filter: hue-rotate(var(--hue)); transition: filter .6s ease;
+    }
     .scroll::before,.scroll::after{content:""; position:absolute; left:6vmin; right:6vmin; height:10px; border-radius:8px; background:linear-gradient(180deg,#a47b48,#6d4a25); box-shadow:0 2px 6px rgba(0,0,0,.25)}
     .scroll::before{top:2vmin} .scroll::after{bottom:2vmin}
+
     .stack{height:60vh; display:grid; grid-template-rows:1fr auto 1fr; align-items:center; justify-items:center; text-align:center; gap:2.2vmin; user-select:none}
     .prev,.next{max-width:58ch; font-size:clamp(14px,2.6vmin,19px); line-height:1.45; color:var(--fade); filter:blur(.15px)}
     .curr{max-width:62ch; font-size:clamp(18px,3.6vmin,28px); line-height:1.5; font-variation-settings:'wght' 560}
     .ref{margin-top:1.2vmin; font-size:.9em; letter-spacing:.02em; opacity:.8}
     .stack.anim{transition:transform 700ms cubic-bezier(.2,.7,.2,1)}
+
+    /* pulse on verse change */
+    .scroll.pulse { animation:pulseBg 900ms ease; }
+    @keyframes pulseBg {
+      0%{filter:brightness(1) hue-rotate(var(--hue));}
+      40%{filter:brightness(1.06) hue-rotate(var(--hue));}
+      100%{filter:brightness(1) hue-rotate(var(--hue));}
+    }
   </style>
 </head>
 <body>
+  <!-- clouds -->
+  <div class="sky" aria-hidden="true">
+    <div class="cloud layer1"></div>
+    <div class="cloud layer2"></div>
+  </div>
+
   <div class="edge"></div>
+
   <div class="wrap">
     <div class="frame">
-      <!-- New header -->
       <div class="headline">
         Comment a Bible verse to see it displayed and read aloud
         <span class="ex">— e.g., “John 3:16”</span>
@@ -60,13 +101,13 @@
 
   <script>
   // ===== CONFIG =====
-  const WS_URL = 'wss://tiktoklive-d3qe.onrender.com/ws';           // <- set to your WebSocket endpoint
-  const DEFAULT_TRANSLATION = 'kjv';               // bible-api.com translation
-  const MIN_GAP_MS = 2500;                          // pause between items
-  const AUTOSCROLL_MS = 700;                        // UI transition time (matches CSS)
+  const WS_URL = 'wss://tiktoklive-d3qe.onrender.com/ws';
+  const DEFAULT_TRANSLATION = 'kjv';
+  const MIN_GAP_MS = 2500;
+  const AUTOSCROLL_MS = 700;
 
   // ===== STATE =====
-  const q = []; // queue of {ref, text, audioUrl, user}
+  const q = [];
   let playing = false; let ws;
   const elPrev = document.getElementById('prev');
   const elCurr = document.getElementById('curr');
@@ -74,16 +115,34 @@
   const elNext = document.getElementById('next');
   const elStack = document.getElementById('stack');
   const elAudio = document.getElementById('player');
+  const elScroll = document.querySelector('.scroll');
 
   // ===== UTIL =====
   const sleep = (ms)=>new Promise(r=>setTimeout(r,ms));
   const titleCase = (s)=> s.replace(/\b([a-z])([a-z]*)/gi, (_,a,b)=>a.toUpperCase()+b.toLowerCase());
-  function normalizeRef(raw){
-    // Accept case-insensitive inputs like "john 3:16" → "John 3:16"
-    const s = String(raw||'').trim().toLowerCase().replace(/\s+/g,' ');
-    return titleCase(s);
+
+  // typo fixes + validation
+  const COMMON_FIXES = [
+    [/^mahew\b/i, 'Matthew'], [/^mathew\b/i, 'Matthew'], [/^ma?thew\b/i, 'Matthew'],
+    [/^jonh\b/i, 'John'],
+    [/^phillip?ians\b/i, 'Philippians'], [/^philipians\b/i, 'Philippians'],
+    [/^psalms?\b/i, 'Psalms'], [/^prover?bs?\b/i, 'Proverbs'],
+    [/^romans?\b/i, 'Romans'], [/^corinthians?\b/i, 'Corinthians']
+  ];
+  function fixBookTypos(ref){
+    const m = String(ref||'').match(/^([^\d:]+)(.*)$/);
+    if(!m) return ref;
+    let [, book, rest] = m;
+    book = book.trim();
+    for(const [re,correct] of COMMON_FIXES){ if(re.test(book)){ book = correct; break; } }
+    rest = String(rest||'').trim().replace(/^(\d)/,' $1');
+    return `${book} ${rest}`.replace(/\s+/g,' ').trim();
   }
   function isVerseRef(s){ return /\b[0-9a-zA-Z]+\s+\d{1,3}:\d{1,3}(-\d{1,3})?\b/i.test(s||''); }
+  function normalizeRef(raw){
+    const s = String(raw||'').trim().toLowerCase().replace(/\s+/g,' ');
+    return titleCase(fixBookTypos(s));
+  }
 
   async function fetchVerseText(ref){
     const url = `https://bible-api.com/${encodeURIComponent(ref)}?translation=${DEFAULT_TRANSLATION}`;
@@ -104,23 +163,33 @@
     elCurrRef.textContent = item.text ? item.ref : '';
   }
 
+  // theme bump per verse
+  let hue = 0, hueStep = 24;
+  function bumpTheme(){
+    hue = (hue + hueStep) % 360;
+    document.documentElement.style.setProperty('--hue', hue + 'deg');
+    elScroll.classList.add('pulse'); setTimeout(()=> elScroll.classList.remove('pulse'), 800);
+  }
+
   async function playItem(item){
     await showCurrent(item); updatePreview();
-    elAudio.volume = 1; // fixed for production
+    elAudio.volume = 1;
 
     if(item.audioUrl){
-      elAudio.src = item.audioUrl; try{ await elAudio.play(); }catch(e){}
+      elAudio.src = item.audioUrl; try{ await elAudio.play(); }catch{}
       await new Promise(res=> elAudio.onended = res);
       return;
     }
 
-    // Fallback: browser TTS (device-dependent). If unavailable, just pause.
     if('speechSynthesis' in window){
       const utt = new SpeechSynthesisUtterance(item.text || item.ref);
       utt.rate = 0.95; utt.pitch = 1.0; utt.volume = 1;
-      const endP = new Promise(res=> utt.onend = res);
-      window.speechSynthesis.cancel(); window.speechSynthesis.speak(utt);
-      await endP;
+      const done = new Promise(res=> utt.onend = res);
+      try{ speechSynthesis.cancel(); }catch{}
+      try{ speechSynthesis.speak(utt); }catch{}
+      // watchdog so queue never stalls
+      const watchdog = sleep(12000).then(()=>{ try{ speechSynthesis.cancel(); }catch{} });
+      await Promise.race([done, watchdog]);
     } else {
       await sleep(4000);
     }
@@ -130,18 +199,19 @@
     if(playing) return; playing = true;
     while(q.length){
       const item = q.shift();
-      if (!item.text) {
-  if (!isVerseRef(item.ref)) {
-    // skip this item entirely if it’s not a valid reference
-    continue; // (inside the while loop)
-  }
-  try { item.text = await fetchVerseText(item.ref); }
-  catch { item.text = item.ref; } // fall back to reading the ref itself
-}
 
+      if(!item.text){
+        if(!isVerseRef(item.ref)) continue;
+        try{ item.text = await fetchVerseText(item.ref); }
+        catch{ item.text = item.ref; }
+      }
+
+      // slide up
       elStack.classList.add('anim'); elStack.style.transform = 'translateY(-12%)';
       await sleep(AUTOSCROLL_MS);
       elStack.classList.remove('anim'); elStack.style.transform = 'translateY(0)';
+
+      bumpTheme(); // color/tint change each verse
 
       await playItem(item); await sleep(MIN_GAP_MS);
       item._played = { text: `${item.text} — ${item.ref}` };
@@ -151,16 +221,17 @@
   }
 
   function enqueue(ref, opts={}){
-    if(!ref) return; const norm = normalizeRef(ref);
+    if(!ref) return;
+    const norm = normalizeRef(ref);
+    if(!isVerseRef(norm)) return; // ignore junk
     q.push({ ref: norm, text: opts.text, audioUrl: opts.audioUrl, user: opts.user });
     updatePreview(); pump();
   }
 
-  // ===== WS (no UI controls; only programmatic input) =====
+  // ===== WS =====
   function connectWS(){
-    if(!WS_URL || WS_URL.startsWith('wss://YOUR_SERVER')) return; // disabled until configured
+    if(!WS_URL || WS_URL.startsWith('wss://YOUR_SERVER')) return;
     ws = new WebSocket(WS_URL);
-    ws.onopen = ()=>{};
     ws.onclose = ()=> setTimeout(connectWS, 2500);
     ws.onmessage = (evt)=>{
       try{
@@ -168,11 +239,9 @@
         if(msg.type === 'read' && msg.ref){ enqueue(msg.ref, { text: msg.text, audioUrl: msg.audioUrl, user: msg.user }); }
         if(msg.type === 'bulk' && Array.isArray(msg.items)) msg.items.forEach(it=> enqueue(it.ref, { text: it.text, audioUrl: it.audioUrl, user: it.user }));
         if(msg.type === 'clear'){ q.length = 0; }
-      }catch(e){ /* ignore bad messages */ }
+      }catch{}
     };
   }
-
-  // No demo, no HUD, no keyboard handlers. Pure display.
   connectWS();
   </script>
 </body>
