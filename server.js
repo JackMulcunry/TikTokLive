@@ -5,8 +5,8 @@ import { WebcastPushConnection } from 'tiktok-live-connector';
 
 // ----- ENV -----
 const PORT = process.env.PORT || 8080;
-const HANDLE = process.env.TIKTOK_USERNAME;
-const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
+const HANDLE = (process.env.TIKTOK_USERNAME || '').trim();
+const ADMIN_TOKEN = (process.env.ADMIN_TOKEN || '').trim();
 
 if (!HANDLE) {
   console.error('Set TIKTOK_USERNAME in .env');
@@ -16,23 +16,29 @@ if (!HANDLE) {
 const app = express();
 app.use(express.json());
 
-// --- WebSocket hub (browser pages connect here) ---
+// --- HTTP + WS ---
 const server = app.listen(PORT, () => {
   console.log(`HTTP/WS listening on :${PORT}`);
 });
 const wss = new WebSocketServer({ server, path: '/ws' });
 
+let lastActivityAt = Date.now();
 function broadcast(obj) {
   const msg = JSON.stringify(obj);
+  lastActivityAt = Date.now();
   for (const client of wss.clients) {
     if (client.readyState === 1) client.send(msg);
   }
 }
 
-// --- Health check ---
+wss.on('connection', () => {
+  console.log('[ws] client connected; total:', wss.clients.size);
+});
+
+// --- Health ---
 app.get('/health', (_req, res) => res.json({ ok: true }));
 
-// --- Optional: manual injection endpoint (secured with simple token) ---
+// --- Inject (admin) ---
 app.post('/inject', (req, res) => {
   const auth = req.headers.authorization || '';
   if (!ADMIN_TOKEN || auth !== `Bearer ${ADMIN_TOKEN}`) {
@@ -40,28 +46,29 @@ app.post('/inject', (req, res) => {
   }
   const { ref, text, audioUrl, user } = req.body || {};
   if (!ref) return res.status(400).json({ error: 'missing ref' });
+  console.log(`[inject] ${ref}`);
+  lastActivityAt = Date.now();
   broadcast({ type: 'read', ref, text, audioUrl, user: user || 'admin' });
   res.json({ ok: true });
 });
 
-// --- Verse parsing & anti-spam ---
+// --- Verse parsing / cooldowns (server-side sanity, same as before) ---
 const VERSE_RE = /\b[0-9a-zA-Z]+\s+\d{1,3}:\d{1,3}(?:-\d{1,3})?\b/i;
-const USER_COOLDOWN_MS = 75_000; // per-user 75s
-const GLOBAL_MIN_INTERVAL_MS = 12_000; // one verse every 12s
-const MAX_RANGE_SPAN = 5; // cap to 5 verses if "a-b" given
+const USER_COOLDOWN_MS = 75_000;
+const GLOBAL_MIN_INTERVAL_MS = 12_000;
+const MAX_RANGE_SPAN = 5;
 const recentUsers = new Map(); // userId -> lastTime
 let lastGlobal = 0;
 
-function looksLikeVerse(s = '') {
-  return VERSE_RE.test(s);
-}
+const looksLikeVerse = (s='') => VERSE_RE.test(s);
 function clampRange(ref) {
-  const m = ref.match(/^(.*?:)(\d+)-(\d+)$/i);
+  const m = (ref||'').match(/^(.*?:)(\d+)-(\d+)$/i);
   if (!m) return ref;
-  const [, prefix, a, b] = m;
-  const A = parseInt(a, 10), B = parseInt(b, 10);
-  if (!Number.isFinite(A) || !Number.isFinite(B)) return ref;
-  if (B - A > MAX_RANGE_SPAN) return `${prefix}${A}-${A + MAX_RANGE_SPAN}`;
+  const [, p, a, b] = m;
+  const A = +a, B = +b;
+  if (Number.isFinite(A) && Number.isFinite(B) && B - A > MAX_RANGE_SPAN) {
+    return `${p}${A}-${A + MAX_RANGE_SPAN}`;
+  }
   return ref;
 }
 function allowedToEnqueue(userId) {
@@ -74,7 +81,7 @@ function allowedToEnqueue(userId) {
   return true;
 }
 
-// --- TikTok Chat Listener with auto-retry ---
+// --- TikTok connection with auto-retry ---
 const tiktok = new WebcastPushConnection(HANDLE, {
   enableExtendedGiftInfo: false,
   requestOptions: { timeout: 10000 }
@@ -83,26 +90,19 @@ const tiktok = new WebcastPushConnection(HANDLE, {
 async function connectTikTok() {
   try {
     const state = await tiktok.connect();
-    console.log(
-      `Connected to @${HANDLE}`,
-      state?.roomId ? `(room ${state.roomId})` : ''
-    );
+    console.log(`Connected to @${HANDLE}`, state?.roomId ? `(room ${state.roomId})` : '');
   } catch (err) {
     console.error('Failed to connect:', err?.message || err);
-    // try again in 15s
     setTimeout(connectTikTok, 15_000);
   }
 }
-
-// initial connect
 connectTikTok();
 
-// reconnect when dropped
 tiktok.on('disconnected', () => {
   console.warn('Disconnected — retrying in 15s…');
   setTimeout(connectTikTok, 15_000);
 });
-tiktok.on('liveEnd', () => console.warn('Live ended.'));
+tiktok.on('liveEnd',   () => console.warn('Live ended.'));
 tiktok.on('streamEnd', () => console.warn('Stream ended.'));
 
 tiktok.on('chat', (data) => {
@@ -117,29 +117,36 @@ tiktok.on('chat', (data) => {
     const safe = clampRange(norm);
 
     console.log(`Queue: ${safe} (from ${data?.uniqueId || 'user'})`);
+    lastActivityAt = Date.now();
     broadcast({ type: 'read', ref: safe, user: data?.uniqueId || 'user' });
   } catch (e) {
     console.error('chat handler error', e);
   }
+});
 
-  // Auto-verse trigger (to prevent inactivity)
-const KEEPALIVE_INTERVAL = 60_000; // every 60s
+// --- Keepalive auto-verse (ONLY if a client is connected & idle) ---
+const KEEPALIVE_INTERVAL_MS = 60_000;  // try every 60s
+const QUIET_GAP_MS          = 55_000;  // inject only if no activity ~55s
 const AUTO_VERSES = [
-  "John 3:16",
-  "Psalm 23:1",
-  "Romans 12:2",
-  "Proverbs 3:5",
-  "Philippians 4:13"
+  'John 3:16',
+  'Psalm 23:1',
+  'Proverbs 3:5-6',
+  'Romans 12:2',
+  'Philippians 4:6-7',
+  'Matthew 11:28'
 ];
 
 setInterval(() => {
-  // Only inject if nothing else is in flight
-  const verse = AUTO_VERSES[Math.floor(Math.random() * AUTO_VERSES.length)];
-  console.log(`[auto] Injecting keepalive verse: ${verse}`);
-  broadcast({ type: 'read', ref: verse, user: 'auto' });
-}, KEEPALIVE_INTERVAL);
+  const clients = [...wss.clients].filter(c => c.readyState === 1).length;
+  const idleFor = Date.now() - lastActivityAt;
 
-});
+  if (clients > 0 && idleFor > QUIET_GAP_MS) {
+    const ref = AUTO_VERSES[Math.floor(Math.random() * AUTO_VERSES.length)];
+    console.log(`[auto] clients=${clients} idle=${Math.round(idleFor/1000)}s → ${ref}`);
+    lastActivityAt = Date.now();
+    broadcast({ type: 'read', ref, user: 'auto' });
+  }
+}, KEEPALIVE_INTERVAL_MS);
 
 
 
